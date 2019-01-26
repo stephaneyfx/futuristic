@@ -1,6 +1,6 @@
 [package]
 name = "futuristic"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Stephane Raux <stephaneyfx@gmail.com>"]
 edition = "2018"
 description = "Extensions to the futures crate"
