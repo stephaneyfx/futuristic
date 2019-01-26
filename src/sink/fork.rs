@@ -1,7 +1,7 @@
 // Copyright (C) 2018 Stephane Raux. Distributed under the MIT license.
 
 use either::{Either, Left, Right};
-use futures::{Async, AsyncSink, Poll, Sink, StartSend};
+use futures::{Async, AsyncSink, Poll, Sink, StartSend, try_ready};
 use std::marker::PhantomData;
 
 /// Sink returned by SinkTools::fork.
@@ -92,11 +92,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::SinkTools;
     use either::{Left, Right};
     use futures::{Future, Sink, Stream};
     use futures::stream;
     use futures::sync::mpsc;
-    use SinkTools;
 
     #[test]
     fn it_works() {

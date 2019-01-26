@@ -2,6 +2,7 @@
 name = "futuristic"
 version = "0.1.0"
 authors = ["Stephane Raux <stephaneyfx@gmail.com>"]
+edition = "2018"
 description = "Extensions to the futures crate"
 license = "MIT"
 homepage = "https://github.com/stephaneyfx/futuristic"
@@ -11,4 +12,4 @@ keywords = ["futures", "streams", "sinks", "asynchronous"]
 
 [dependencies]
 either = "1.5.0"
-futures = "0.1.21"
+futures = "0.1.25"

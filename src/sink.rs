@@ -8,8 +8,8 @@ use futures::Sink;
 mod fork;
 mod null;
 
-pub use self::fork::Fork;
-pub use self::null::Null;
+pub use fork::Fork;
+pub use null::Null;
 
 /// Extension trait for `Sink`.
 pub trait SinkTools: Sink {

@@ -5,10 +5,6 @@
 #![deny(missing_docs)]
 #![deny(warnings)]
 
-extern crate either;
-#[macro_use]
-extern crate futures;
-
 pub mod sink;
 
 pub use sink::SinkTools;
