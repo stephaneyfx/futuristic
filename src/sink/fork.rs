@@ -1,7 +1,7 @@
 // Copyright (C) 2018 Stephane Raux. Distributed under the MIT license.
 
 use either::{Either, Left, Right};
-use futures::{Async, AsyncSink, Poll, Sink, StartSend, try_ready};
+use futures::{Async, AsyncSink, Poll, Sink, StartSend};
 use std::marker::PhantomData;
 
 /// Sink returned by SinkTools::fork.
@@ -13,7 +13,9 @@ where
 {
     switch: F,
     left_sink: LS,
+    left_closed: bool,
     right_sink: RS,
+    right_closed: bool,
     buffer: Option<Either<LS::SinkItem, RS::SinkItem>>,
     phantom: PhantomData<fn(T)>,
 }
@@ -28,13 +30,15 @@ where
         Fork {
             switch,
             left_sink: left_sink,
+            left_closed: false,
             right_sink: right_sink,
+            right_closed: false,
             buffer: None,
             phantom: PhantomData,
         }
     }
 
-    fn poll(&mut self) -> Poll<(), LS::SinkError> {
+    fn flush_buffer(&mut self) -> Poll<(), LS::SinkError> {
         match self.buffer.take() {
             Some(Left(item)) => {
                 if let AsyncSink::NotReady(item) =
@@ -70,23 +74,41 @@ where
     type SinkError = LS::SinkError;
 
     fn start_send(&mut self, item: T) -> StartSend<T, Self::SinkError> {
-        if self.poll()?.is_not_ready() {return Ok(AsyncSink::NotReady(item))}
+        if self.flush_buffer()?.is_not_ready() {
+            return Ok(AsyncSink::NotReady(item))
+        }
         self.buffer = Some((self.switch)(item));
         Ok(AsyncSink::Ready)
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        let ready = self.poll()?;
-        try_ready!(self.left_sink.poll_complete());
-        try_ready!(self.right_sink.poll_complete());
-        Ok(ready)
+        let self_state = self.flush_buffer()?;
+        let left_state = self.left_sink.poll_complete()?;
+        let right_state = self.right_sink.poll_complete()?;
+        if self_state.is_ready() && left_state.is_ready()
+            && right_state.is_ready()
+        {
+            Ok(Async::Ready(()))
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 
     fn close(&mut self) -> Poll<(), Self::SinkError> {
-        try_ready!(self.poll());
-        self.left_sink.close()?;
-        self.right_sink.close()?;
-        Ok(Async::Ready(()))
+        if self.buffer.is_some() && self.poll_complete()?.is_not_ready() {
+            return Ok(Async::NotReady)
+        }
+        if !self.left_closed {
+            self.left_closed = self.left_sink.close()?.is_ready();
+        }
+        if !self.right_closed {
+            self.right_closed = self.right_sink.close()?.is_ready();
+        }
+        if self.left_closed && self.right_closed {
+            Ok(Async::Ready(()))
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 }
 
