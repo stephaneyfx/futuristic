@@ -1,113 +1,128 @@
-// Copyright (C) 2018 Stephane Raux. Distributed under the MIT license.
+// Copyright (C) 2018-2019 Stephane Raux. Distributed under the MIT license.
 
 use either::{Either, Left, Right};
-use futures::{Async, AsyncSink, Poll, Sink, StartSend};
+use futures::{ready, Sink};
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// Sink returned by SinkTools::fork.
 #[derive(Debug)]
-pub struct Fork<T, LS, RS, F>
+pub struct Fork<T, LS, RS, F, LV, RV>
 where
-    LS: Sink,
-    RS: Sink,
+    LS: Sink<LV>,
+    RS: Sink<RV>,
 {
-    switch: F,
     left_sink: LS,
-    left_closed: bool,
     right_sink: RS,
-    right_closed: bool,
-    buffer: Option<Either<LS::SinkItem, RS::SinkItem>>,
+    state: ForkState<F, LV, RV>,
     phantom: PhantomData<fn(T)>,
 }
 
-impl<T, LS, RS, F> Fork<T, LS, RS, F>
+#[derive(Debug)]
+struct ForkState<F, LV, RV> {
+    switch: F,
+    left_closed: bool,
+    right_closed: bool,
+    buffer: Option<Either<LV, RV>>,
+}
+
+impl<T, LS, RS, F, LV, RV> Fork<T, LS, RS, F, LV, RV>
 where
-    F: FnMut(T) -> Either<LS::SinkItem, RS::SinkItem>,
-    LS: Sink,
-    RS: Sink<SinkError = LS::SinkError>,
+    F: FnMut(T) -> Either<LV, RV>,
+    LS: Sink<LV>,
+    RS: Sink<RV, Error = LS::Error>,
 {
-    pub (crate) fn new(left_sink: LS, right_sink: RS, switch: F) -> Self {
-        Fork {
+    pub(crate) fn new(left_sink: LS, right_sink: RS, switch: F) -> Self {
+        let state = ForkState {
             switch,
-            left_sink: left_sink,
             left_closed: false,
-            right_sink: right_sink,
             right_closed: false,
             buffer: None,
+        };
+        Fork {
+            left_sink,
+            right_sink,
+            state,
             phantom: PhantomData,
         }
     }
 
-    fn flush_buffer(&mut self) -> Poll<(), LS::SinkError> {
-        match self.buffer.take() {
-            Some(Left(item)) => {
-                if let AsyncSink::NotReady(item) =
-                    self.left_sink.start_send(item)?
-                {
-                    self.buffer = Some(Left(item));
-                }
-            }
-            Some(Right(item)) => {
-                if let AsyncSink::NotReady(item) =
-                    self.right_sink.start_send(item)?
-                {
-                    self.buffer = Some(Right(item));
-                }
-            }
-            None => {}
-        }
-        if self.buffer.is_none() {
-            Ok(Async::Ready(()))
-        } else {
-            Ok(Async::NotReady)
-        }
+    fn state<'a>(self: Pin<&'a mut Self>) -> &'a mut ForkState<F, LV, RV> {
+        unsafe { &mut self.get_unchecked_mut().state }
+    }
+
+    unsafe fn left_sink<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut LS> {
+        self.map_unchecked_mut(|x| &mut x.left_sink)
+    }
+
+    unsafe fn right_sink<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut RS> {
+        self.map_unchecked_mut(|x| &mut x.right_sink)
     }
 }
 
-impl<T, LS, RS, F> Sink for Fork<T, LS, RS, F>
+impl<T, LS, RS, F, LV, RV> Sink<T> for Fork<T, LS, RS, F, LV, RV>
 where
-    F: FnMut(T) -> Either<LS::SinkItem, RS::SinkItem>,
-    LS: Sink,
-    RS: Sink<SinkError = LS::SinkError>,
+    F: FnMut(T) -> Either<LV, RV>,
+    LS: Sink<LV>,
+    RS: Sink<RV, Error = LS::Error>,
 {
-    type SinkItem = T;
-    type SinkError = LS::SinkError;
+    type Error = LS::Error;
 
-    fn start_send(&mut self, item: T) -> StartSend<T, Self::SinkError> {
-        if self.flush_buffer()?.is_not_ready() {
-            return Ok(AsyncSink::NotReady(item))
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        match self.state.buffer {
+            Some(Left(_)) => unsafe { ready!(self.as_mut().left_sink().poll_ready(cx)?); }
+            Some(Right(_)) => unsafe { ready!(self.as_mut().right_sink().poll_ready(cx)?); }
+            None => return Poll::Ready(Ok(())),
         }
-        self.buffer = Some((self.switch)(item));
-        Ok(AsyncSink::Ready)
+        let res = match self.as_mut().state().buffer.take() {
+            Some(Left(item)) => unsafe { self.as_mut().left_sink().start_send(item) }
+            Some(Right(item)) => unsafe { self.as_mut().right_sink().start_send(item) }
+            None => unreachable!(),
+        };
+        Poll::Ready(res)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        let self_state = self.flush_buffer()?;
-        let left_state = self.left_sink.poll_complete()?;
-        let right_state = self.right_sink.poll_complete()?;
-        if self_state.is_ready() && left_state.is_ready()
-            && right_state.is_ready()
-        {
-            Ok(Async::Ready(()))
-        } else {
-            Ok(Async::NotReady)
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        assert!(self.state.buffer.is_none());
+        let state = self.state();
+        state.buffer = Some((state.switch)(item));
+        Ok(())
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        ready!(self.as_mut().poll_ready(cx)?);
+        let left_res = unsafe { self.as_mut().left_sink().poll_flush(cx) };
+        let right_res = unsafe { self.as_mut().right_sink().poll_flush(cx) };
+        match (left_res?, right_res?) {
+            (Poll::Ready(_), Poll::Ready(_)) => Poll::Ready(Ok(())),
+            _ => Poll::Pending,
         }
     }
 
-    fn close(&mut self) -> Poll<(), Self::SinkError> {
-        if self.buffer.is_some() && self.poll_complete()?.is_not_ready() {
-            return Ok(Async::NotReady)
-        }
-        if !self.left_closed {
-            self.left_closed = self.left_sink.close()?.is_ready();
-        }
-        if !self.right_closed {
-            self.right_closed = self.right_sink.close()?.is_ready();
-        }
-        if self.left_closed && self.right_closed {
-            Ok(Async::Ready(()))
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        ready!(self.as_mut().poll_ready(cx)?);
+        let left_res = if self.state.left_closed {
+            Poll::Ready(Ok(()))
         } else {
-            Ok(Async::NotReady)
+            let res = unsafe { self.as_mut().left_sink().poll_close(cx) };
+            if let Poll::Ready(Ok(_)) = res {
+                self.as_mut().state().left_closed = true;
+            }
+            res
+        };
+        let right_res = if self.state.right_closed {
+            Poll::Ready(Ok(()))
+        } else {
+            let res = unsafe { self.as_mut().right_sink().poll_close(cx) };
+            if let Poll::Ready(Ok(_)) = res {
+                self.as_mut().state().right_closed = true;
+            }
+            res
+        };
+        match (left_res?, right_res?) {
+            (Poll::Ready(_), Poll::Ready(_)) => Poll::Ready(Ok(())),
+            _ => Poll::Pending,
         }
     }
 }
@@ -116,25 +131,26 @@ where
 mod tests {
     use crate::SinkTools;
     use either::{Left, Right};
-    use futures::{Future, Sink, Stream};
+    use futures::{SinkExt, StreamExt};
+    use futures::channel::mpsc;
+    use futures::executor::block_on;
     use futures::stream;
-    use futures::sync::mpsc;
 
     #[test]
     fn it_works() {
-        let numbers = stream::iter_ok::<_, ()>(0..10);
+        let numbers = stream::iter(0 .. 10).map(Ok::<u32, ()>);
         let (even_sender, even_receiver) = mpsc::unbounded();
         let (odd_sender, odd_receiver) = mpsc::unbounded();
-        numbers.forward(
-            even_sender.fork(
-                odd_sender,
-                |n| if n % 2 == 0 {Left(n)} else {Right(n)}
-            )
+        let res = numbers.forward(
+            even_sender
+                .fork(odd_sender, |n| if n % 2 == 0 { Left(n) } else { Right(n) })
                 .sink_map_err(|_| ())
-        ).wait().map(|_| ()).unwrap();
-        let (even_nums, odd_nums) = (0..10).partition::<Vec<i32>, _>(
-            |&n| n % 2 == 0);
-        assert_eq!(even_receiver.collect().wait(), Ok(even_nums));
-        assert_eq!(odd_receiver.collect().wait(), Ok(odd_nums));
+        );
+        block_on(res).unwrap();
+        let (even_nums, odd_nums) = (0 .. 10).partition::<Vec<u32>, _>(|&n| n % 2 == 0);
+        let received_evens = block_on(even_receiver.collect::<Vec<_>>());
+        let received_odds = block_on(odd_receiver.collect::<Vec<_>>());
+        assert_eq!(received_evens, even_nums);
+        assert_eq!(received_odds, odd_nums);
     }
 }
