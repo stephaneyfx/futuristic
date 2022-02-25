@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2019 Stephane Raux. Distributed under the MIT license.
+// Copyright (C) 2018-2022 Stephane Raux. Distributed under the 0BSD license.
 
 use either::{Either, Left, Right};
 use futures::{ready, Sink};
@@ -71,13 +71,17 @@ where
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
         match self.state.buffer {
-            Some(Left(_)) => unsafe { ready!(self.as_mut().left_sink().poll_ready(cx)?); }
-            Some(Right(_)) => unsafe { ready!(self.as_mut().right_sink().poll_ready(cx)?); }
+            Some(Left(_)) => unsafe {
+                ready!(self.as_mut().left_sink().poll_ready(cx)?);
+            },
+            Some(Right(_)) => unsafe {
+                ready!(self.as_mut().right_sink().poll_ready(cx)?);
+            },
             None => return Poll::Ready(Ok(())),
         }
         let res = match self.as_mut().state().buffer.take() {
-            Some(Left(item)) => unsafe { self.as_mut().left_sink().start_send(item) }
-            Some(Right(item)) => unsafe { self.as_mut().right_sink().start_send(item) }
+            Some(Left(item)) => unsafe { self.as_mut().left_sink().start_send(item) },
+            Some(Right(item)) => unsafe { self.as_mut().right_sink().start_send(item) },
             None => unreachable!(),
         };
         Poll::Ready(res)
@@ -131,23 +135,23 @@ where
 mod tests {
     use crate::SinkTools;
     use either::{Left, Right};
-    use futures::{SinkExt, StreamExt};
     use futures::channel::mpsc;
     use futures::executor::block_on;
     use futures::stream;
+    use futures::{SinkExt, StreamExt};
 
     #[test]
     fn it_works() {
-        let numbers = stream::iter(0 .. 10).map(Ok::<u32, ()>);
+        let numbers = stream::iter(0..10).map(Ok::<u32, ()>);
         let (even_sender, even_receiver) = mpsc::unbounded();
         let (odd_sender, odd_receiver) = mpsc::unbounded();
         let res = numbers.forward(
             even_sender
                 .fork(odd_sender, |n| if n % 2 == 0 { Left(n) } else { Right(n) })
-                .sink_map_err(|_| ())
+                .sink_map_err(|_| ()),
         );
         block_on(res).unwrap();
-        let (even_nums, odd_nums) = (0 .. 10).partition::<Vec<u32>, _>(|&n| n % 2 == 0);
+        let (even_nums, odd_nums) = (0..10).partition::<Vec<u32>, _>(|&n| n % 2 == 0);
         let received_evens = block_on(even_receiver.collect::<Vec<_>>());
         let received_odds = block_on(odd_receiver.collect::<Vec<_>>());
         assert_eq!(received_evens, even_nums);

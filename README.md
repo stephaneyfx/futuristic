@@ -1,7 +1,13 @@
-[![Documentation](https://docs.rs/futuristic/badge.svg)](https://docs.rs/futuristic)
-[![Crate](https://img.shields.io/crates/v/futuristic.svg)](https://crates.io/crates/futuristic)
-[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+<!-- cargo-sync-readme start -->
 
-# Purpose
+# Overview
+- [📦 crates.io](https://crates.io/crates/futuristic)
+- [📖 Documentation](https://docs.rs/futuristic)
+- [⚖ 0BSD license](https://spdx.org/licenses/0BSD.html)
 
-Extensions to the [futures](https://docs.rs/futures) crate.
+Extensions to the [`futures`](https://docs.rs/futures) crate.
+
+# Contribute
+All contributions shall be licensed under the [0BSD license](https://spdx.org/licenses/0BSD.html).
+
+<!-- cargo-sync-readme end -->

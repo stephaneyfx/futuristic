@@ -1,13 +1,13 @@
-// Copyright (C) 2018 Stephane Raux. Distributed under the MIT license.
+// Copyright (C) 2018-2022 Stephane Raux. Distributed under the 0BSD license.
 
 //! Extensions to the `Sink` trait from the futures crate.
 
 use either::Either;
 use futures::Sink;
 
-mod fork;
-
 pub use fork::Fork;
+
+mod fork;
 
 /// Extension trait for `Sink`.
 pub trait SinkTools<T>: Sink<T> {
