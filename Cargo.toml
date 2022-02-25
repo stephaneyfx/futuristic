@@ -2,7 +2,7 @@
 name = "futuristic"
 version = "0.3.0"
 authors = ["Stephane Raux <stephaneyfx@gmail.com>"]
-edition = "2018"
+edition = "2021"
 description = "Extensions to the futures crate"
 license = "MIT"
 homepage = "https://github.com/stephaneyfx/futuristic"
