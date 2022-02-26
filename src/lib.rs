@@ -14,5 +14,7 @@
 #![deny(warnings)]
 
 pub use sink::SinkTools;
+pub use stream::StreamTools;
 
 pub mod sink;
+pub mod stream;
