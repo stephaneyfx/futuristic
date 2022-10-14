@@ -5,12 +5,12 @@
 use futures::Stream;
 
 pub use zip_latest::ZipLatest;
-pub use zip_latest_all::ZipLatestAll;
 pub use zip_latest_with::ZipLatestWith;
+pub use zip_latest_with_all::ZipLatestAll;
 
 mod zip_latest;
-mod zip_latest_all;
 mod zip_latest_with;
+mod zip_latest_with_all;
 
 /// Extension trait for [`Stream`](futures::Stream).
 pub trait StreamTools: Stream {
