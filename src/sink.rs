@@ -1,6 +1,6 @@
 // Copyright (C) 2018-2022 Stephane Raux. Distributed under the 0BSD license.
 
-//! Extensions to the [`Sink`] trait from the [`futures`] crate.
+//! Tools for sinks
 
 use either::Either;
 use futures::Sink;
@@ -9,7 +9,7 @@ pub use fork::Fork;
 
 mod fork;
 
-/// Extension trait for [`Sink`].
+/// Extension trait for [`Sink`](futures::Sink).
 pub trait SinkTools<T>: Sink<T> {
     /// Returns a sink that dispatches to `self` or `other`.
     ///

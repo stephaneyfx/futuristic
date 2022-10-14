@@ -16,5 +16,6 @@
 pub use sink::SinkTools;
 pub use stream::StreamTools;
 
+pub mod future;
 pub mod sink;
 pub mod stream;

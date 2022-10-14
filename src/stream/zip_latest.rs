@@ -133,59 +133,31 @@ impl<T> StreamState<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::StreamTools;
-    use futures::{channel::mpsc, executor::block_on, future::ready, StreamExt};
-    use std::task::Poll;
+    use crate::{stream::test_util::yield_on_none, StreamTools};
+    use futures::{
+        executor::block_on,
+        stream::{empty, repeat},
+        StreamExt,
+    };
 
     #[test]
     fn it_works() {
-        let (mut waker_sender, waker_receiver) = mpsc::unbounded();
-        let mut n = 0;
-        let a = futures::stream::poll_fn({
-            let mut waker_sender = waker_sender.clone();
-            move |ctx| {
-                let i = n;
-                n += 1;
-                match i {
-                    0..=2 => Poll::Ready(Some(i)),
-                    3 => {
-                        waker_sender.unbounded_send(ctx.waker().clone()).unwrap();
-                        Poll::Pending
-                    }
-                    4..=5 => Poll::Ready(Some(i)),
-                    _ => {
-                        waker_sender.disconnect();
-                        Poll::Ready(None)
-                    }
-                }
-            }
-        });
-        let mut n = 0;
-        let b = futures::stream::poll_fn(move |ctx| {
-            let i = n;
-            n += 1;
-            match i {
-                0 => {
-                    waker_sender.unbounded_send(ctx.waker().clone()).unwrap();
-                    Poll::Pending
-                }
-                1..=5 => Poll::Ready(Some(i)),
-                6 => {
-                    waker_sender.unbounded_send(ctx.waker().clone()).unwrap();
-                    Poll::Pending
-                }
-                7 => Poll::Ready(Some(i)),
-                _ => {
-                    waker_sender.disconnect();
-                    Poll::Ready(None)
-                }
-            }
-        });
-        let drain_wakers = waker_receiver.for_each(|waker| ready(waker.wake()));
-        let (c, _) = block_on(futures::future::join(
-            a.zip_latest(b).collect::<Vec<_>>(),
-            drain_wakers,
-        ));
-        assert_eq!(c, [(0, 1), (1, 2), (2, 3), (2, 4), (4, 5), (5, 5), (5, 7)])
+        let a = yield_on_none([Some(0), None, Some(1), None, None, Some(2)]);
+        let b = yield_on_none([None, Some(10), Some(11), Some(12), None, None, Some(13)]);
+        let expected = [(0, 10), (0, 11), (1, 12), (2, 13)];
+        let actual = block_on(a.zip_latest(b).collect::<Vec<_>>());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn zipping_latest_of_2_empty_streams_gives_empty_stream() {
+        let r = block_on(empty::<()>().zip_latest(empty::<()>()).collect::<Vec<_>>());
+        assert_eq!(r, []);
+    }
+
+    #[test]
+    fn zipping_latest_of_empty_and_infinite_streams_gives_empty_stream() {
+        let r = block_on(empty::<()>().zip_latest(repeat(())).collect::<Vec<_>>());
+        assert_eq!(r, []);
     }
 }

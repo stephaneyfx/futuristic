@@ -1,11 +1,13 @@
 // Copyright (C) 2018-2022 Stephane Raux. Distributed under the 0BSD license.
 
 use either::{Either, Left, Right};
-use futures::{ready, Sink};
+use futures::Sink;
 use pin_project::pin_project;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{
+    marker::PhantomData,
+    pin::Pin,
+    task::{ready, Context, Poll},
+};
 
 /// Sink returned by [`SinkTools::fork`](crate::SinkTools::fork).
 #[pin_project]
