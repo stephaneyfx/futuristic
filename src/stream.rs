@@ -4,7 +4,7 @@
 
 use futures::Stream;
 
-pub use zip_latest::ZipLatest;
+pub use zip_latest::ZipLatestWith;
 pub use zip_latest_all::ZipLatestAll;
 
 mod zip_latest;
@@ -27,12 +27,13 @@ pub trait StreamTools: Stream {
     /// ------0--------1--------2----------------> other
     /// ------(a, 0)---(b, 1)---(b, 2)---(c, 2)--> self.zip_latest(other)
     /// ```
-    fn zip_latest<S>(self, other: S) -> ZipLatest<Self, S>
+    fn zip_latest_with<S, F, T>(self, other: S, combine: F) -> ZipLatestWith<Self, S, F>
     where
         Self: Sized,
         S: Stream,
+        F: FnMut(&Self::Item, &S::Item) -> T,
     {
-        ZipLatest::new(self, other)
+        ZipLatestWith::new(self, other, combine)
     }
 }
 

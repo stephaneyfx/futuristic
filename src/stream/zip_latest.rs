@@ -11,10 +11,10 @@ use std::{
     task::{Context, Poll},
 };
 
-/// Stream returned by [`StreamTools::zip_latest`](crate::StreamTools::zip_latest).
+/// Stream returned by [`StreamTools::zip_latest_with`](crate::StreamTools::zip_latest_with).
 #[pin_project]
 #[derive(Debug)]
-pub struct ZipLatest<A, B>
+pub struct ZipLatestWith<A, B, F>
 where
     A: Stream,
     B: Stream,
@@ -25,31 +25,33 @@ where
     other_stream: Fuse<B>,
     state: StreamState<A::Item>,
     other_state: StreamState<B::Item>,
+    combine: F,
 }
 
-impl<A, B> ZipLatest<A, B>
+impl<A, B, F, T> ZipLatestWith<A, B, F>
 where
     A: Stream,
     B: Stream,
+    F: FnMut(&A::Item, &B::Item) -> T,
 {
-    pub(crate) fn new(stream: A, other_stream: B) -> Self {
+    pub(crate) fn new(stream: A, other_stream: B, combine: F) -> Self {
         Self {
             stream: stream.fuse(),
             other_stream: other_stream.fuse(),
             state: StreamState::Nothing,
             other_state: StreamState::Nothing,
+            combine,
         }
     }
 }
 
-impl<A, B> Stream for ZipLatest<A, B>
+impl<A, B, F, T> Stream for ZipLatestWith<A, B, F>
 where
     A: Stream,
-    A::Item: Clone,
     B: Stream,
-    B::Item: Clone,
+    F: FnMut(&A::Item, &B::Item) -> T,
 {
-    type Item = (A::Item, B::Item);
+    type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -63,33 +65,33 @@ where
                 *this.other_state = StreamState::New(x);
             }
         }
-        let (new_state, new_other_state, res) = match (
+        let (res, new_state, new_other_state) = match (
             mem::replace(this.state, StreamState::Nothing),
             mem::replace(this.other_state, StreamState::Nothing),
         ) {
             (StreamState::New(a), StreamState::New(b))
             | (StreamState::New(a), StreamState::Yielded(b))
             | (StreamState::Yielded(a), StreamState::New(b)) => (
-                StreamState::Yielded(a.clone()),
-                StreamState::Yielded(b.clone()),
-                Poll::Ready(Some((a, b))),
+                Poll::Ready(Some((this.combine)(&a, &b))),
+                StreamState::Yielded(a),
+                StreamState::Yielded(b),
             ),
             (StreamState::Nothing, _) if this.stream.is_done() => (
-                StreamState::Nothing,
-                StreamState::Nothing,
                 Poll::Ready(None),
+                StreamState::Nothing,
+                StreamState::Nothing,
             ),
             (_, StreamState::Nothing) if this.other_stream.is_done() => (
-                StreamState::Nothing,
-                StreamState::Nothing,
                 Poll::Ready(None),
+                StreamState::Nothing,
+                StreamState::Nothing,
             ),
             _ if this.stream.is_done() && this.other_stream.is_done() => (
-                StreamState::Nothing,
-                StreamState::Nothing,
                 Poll::Ready(None),
+                StreamState::Nothing,
+                StreamState::Nothing,
             ),
-            (a, b) => (a, b, Poll::Pending),
+            (a, b) => (Poll::Pending, a, b),
         };
         *this.state = new_state;
         *this.other_state = new_other_state;
@@ -97,12 +99,11 @@ where
     }
 }
 
-impl<A, B> FusedStream for ZipLatest<A, B>
+impl<A, B, F, T> FusedStream for ZipLatestWith<A, B, F>
 where
     A: Stream,
-    A::Item: Clone,
     B: Stream,
-    B::Item: Clone,
+    F: FnMut(&A::Item, &B::Item) -> T,
 {
     fn is_terminated(&self) -> bool {
         matches!(
@@ -144,20 +145,28 @@ mod tests {
     fn it_works() {
         let a = yield_on_none([Some(0), None, Some(1), None, None, Some(2)]);
         let b = yield_on_none([None, Some(10), Some(11), Some(12), None, None, Some(13)]);
-        let expected = [(0, 10), (0, 11), (1, 12), (2, 13)];
-        let actual = block_on(a.zip_latest(b).collect::<Vec<_>>());
+        let expected = [10, 11, 13, 15];
+        let actual = block_on(a.zip_latest_with(b, |i, j| i + j).collect::<Vec<_>>());
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn zipping_latest_of_2_empty_streams_gives_empty_stream() {
-        let r = block_on(empty::<()>().zip_latest(empty::<()>()).collect::<Vec<_>>());
+        let r = block_on(
+            empty::<()>()
+                .zip_latest_with(empty::<()>(), |_, _| ())
+                .collect::<Vec<_>>(),
+        );
         assert_eq!(r, []);
     }
 
     #[test]
     fn zipping_latest_of_empty_and_infinite_streams_gives_empty_stream() {
-        let r = block_on(empty::<()>().zip_latest(repeat(())).collect::<Vec<_>>());
+        let r = block_on(
+            empty::<()>()
+                .zip_latest_with(repeat(()), |_, _| ())
+                .collect::<Vec<_>>(),
+        );
         assert_eq!(r, []);
     }
 }
