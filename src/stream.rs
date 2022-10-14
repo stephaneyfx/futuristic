@@ -4,11 +4,11 @@
 
 use futures::Stream;
 
-pub use zip_latest::ZipLatestWith;
 pub use zip_latest_all::ZipLatestAll;
+pub use zip_latest_with::ZipLatestWith;
 
-mod zip_latest;
 mod zip_latest_all;
+mod zip_latest_with;
 
 /// Extension trait for [`Stream`](futures::Stream).
 pub trait StreamTools: Stream {
