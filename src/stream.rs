@@ -4,14 +4,40 @@
 
 use futures::Stream;
 
+pub use zip_latest::ZipLatest;
 pub use zip_latest_all::ZipLatestAll;
 pub use zip_latest_with::ZipLatestWith;
 
+mod zip_latest;
 mod zip_latest_all;
 mod zip_latest_with;
 
 /// Extension trait for [`Stream`](futures::Stream).
 pub trait StreamTools: Stream {
+    /// Zips two streams using their latest values when one is not ready
+    ///
+    /// The zipped stream keeps the latest items produced by both streams. If one of the
+    /// underlying streams is exhausted or not ready and the other stream yields a new item, it is
+    /// combined with the latest item from the stream that did not yield anything new.
+    ///
+    /// The zipped stream ends when both underlying streams end, or if one of the streams ends
+    /// without ever producing an item.
+    ///
+    /// Visually, this gives:
+    /// ```text
+    /// ---0-----------1-----------------2-------> self
+    /// ------10-------11-------12---------------> other
+    /// ------10-------12-------13-------14------> self.zip_latest_with(other, |a, b| a + b)
+    /// ```
+    fn zip_latest_with<S, F, T>(self, other: S, combine: F) -> ZipLatestWith<Self, S, F>
+    where
+        Self: Sized,
+        S: Stream,
+        F: FnMut(&Self::Item, &S::Item) -> T,
+    {
+        ZipLatestWith::new(self, other, combine)
+    }
+
     /// Zips two streams using their latest values when one is not ready
     ///
     /// The zipped stream keeps a copy of the latest items produced by both streams. If one of the
@@ -27,13 +53,14 @@ pub trait StreamTools: Stream {
     /// ------0--------1--------2----------------> other
     /// ------(a, 0)---(b, 1)---(b, 2)---(c, 2)--> self.zip_latest(other)
     /// ```
-    fn zip_latest_with<S, F, T>(self, other: S, combine: F) -> ZipLatestWith<Self, S, F>
+    fn zip_latest<S>(self, other: S) -> ZipLatest<Self, S>
     where
         Self: Sized,
+        Self::Item: Clone,
         S: Stream,
-        F: FnMut(&Self::Item, &S::Item) -> T,
+        S::Item: Clone,
     {
-        ZipLatestWith::new(self, other, combine)
+        ZipLatest::new(self, other)
     }
 }
 

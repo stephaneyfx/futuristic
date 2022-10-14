@@ -135,11 +135,7 @@ impl<T> StreamState<T> {
 #[cfg(test)]
 mod tests {
     use crate::{stream::test_util::yield_on_none, StreamTools};
-    use futures::{
-        executor::block_on,
-        stream::{empty, repeat},
-        StreamExt,
-    };
+    use futures::{executor::block_on, StreamExt};
 
     #[test]
     fn it_works() {
@@ -148,25 +144,5 @@ mod tests {
         let expected = [10, 11, 13, 15];
         let actual = block_on(a.zip_latest_with(b, |i, j| i + j).collect::<Vec<_>>());
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn zipping_latest_of_2_empty_streams_gives_empty_stream() {
-        let r = block_on(
-            empty::<()>()
-                .zip_latest_with(empty::<()>(), |_, _| ())
-                .collect::<Vec<_>>(),
-        );
-        assert_eq!(r, []);
-    }
-
-    #[test]
-    fn zipping_latest_of_empty_and_infinite_streams_gives_empty_stream() {
-        let r = block_on(
-            empty::<()>()
-                .zip_latest_with(repeat(()), |_, _| ())
-                .collect::<Vec<_>>(),
-        );
-        assert_eq!(r, []);
     }
 }
