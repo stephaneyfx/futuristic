@@ -5,41 +5,62 @@ use futures::{
     stream::{FusedStream, FuturesUnordered, StreamFuture},
     Stream, StreamExt,
 };
+use pin_project::pin_project;
 use std::{
+    fmt::{self, Debug},
     future::Future,
     pin::Pin,
     task::{ready, Context, Poll},
 };
 
-/// Stream returned by [`zip_latest_all`](crate::stream::zip_latest_all).
-pub struct ZipLatestAll<S: Stream + Unpin>(Inner<S>);
-
-impl<S> ZipLatestAll<S>
+/// Stream returned by [`zip_latest_with_all`](crate::stream::zip_latest_with_all).
+#[pin_project]
+pub struct ZipLatestWithAll<S, F>
 where
     S: Stream + Unpin,
 {
-    pub(crate) fn new<I>(streams: I) -> Self
+    inner: Inner<S>,
+    combine: F,
+}
+
+impl<S, F, T> ZipLatestWithAll<S, F>
+where
+    S: Stream + Unpin,
+    F: FnMut(&[S::Item]) -> T,
+{
+    pub(crate) fn new<I>(streams: I, combine: F) -> Self
     where
         I: IntoIterator<Item = S>,
     {
-        Self(Inner::Fill(join_all(
-            streams.into_iter().map(|s| s.into_future()),
-        )))
+        Self {
+            inner: Inner::Fill(join_all(streams.into_iter().map(|s| s.into_future()))),
+            combine,
+        }
     }
 }
 
-impl<S> Stream for ZipLatestAll<S>
+impl<S, F> Debug for ZipLatestWithAll<S, F>
 where
     S: Stream + Unpin,
-    S::Item: Clone,
 {
-    type Item = Vec<S::Item>;
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ZipLatestWithAll")
+    }
+}
 
-    fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match &mut self.0 {
+impl<S, F, T> Stream for ZipLatestWithAll<S, F>
+where
+    S: Stream + Unpin,
+    F: FnMut(&[S::Item]) -> T,
+{
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        match this.inner {
             Inner::Fill(all) => {
                 let items_and_streams = ready!(Pin::new(all).poll(ctx));
-                let (items, inner) = items_and_streams
+                let (res, inner) = items_and_streams
                     .into_iter()
                     .try_fold(
                         (Vec::new(), FuturesUnordered::new()),
@@ -52,13 +73,13 @@ where
                     )
                     .map(|(items, next_items)| {
                         (
-                            Some(items.clone()),
+                            Some((this.combine)(&items)),
                             Inner::Filled(Filled { items, next_items }),
                         )
                     })
                     .unwrap_or_else(|| (None, Inner::Filled(Default::default())));
-                self.0 = inner;
-                Poll::Ready(items)
+                *this.inner = inner;
+                Poll::Ready(res)
             }
             Inner::Filled(Filled { items, next_items }) => {
                 let mut yielded = Vec::new();
@@ -70,14 +91,18 @@ where
                         }
                         Poll::Ready(Some((None, _))) => {}
                         Poll::Ready(None) => {
-                            let items = Some(&*items).filter(|_| !yielded.is_empty()).cloned();
+                            let res = Some(&*items)
+                                .filter(|_| !yielded.is_empty())
+                                .map(|items| (this.combine)(items));
                             next_items.extend(yielded.into_iter().map(|s| s.into_future()));
-                            break Poll::Ready(items);
+                            break Poll::Ready(res);
                         }
                         Poll::Pending => {
-                            let items = Some(&*items).filter(|_| !yielded.is_empty()).cloned();
+                            let res = Some(&*items)
+                                .filter(|_| !yielded.is_empty())
+                                .map(|items| (this.combine)(items));
                             next_items.extend(yielded.into_iter().map(|s| s.into_future()));
-                            break items.map_or(Poll::Pending, |items| Poll::Ready(Some(items)));
+                            break res.map_or(Poll::Pending, |items| Poll::Ready(Some(items)));
                         }
                     }
                 }
@@ -86,13 +111,13 @@ where
     }
 }
 
-impl<S> FusedStream for ZipLatestAll<S>
+impl<S, F, T> FusedStream for ZipLatestWithAll<S, F>
 where
     S: Stream + Unpin,
-    S::Item: Clone,
+    F: FnMut(&[S::Item]) -> T,
 {
     fn is_terminated(&self) -> bool {
-        match &self.0 {
+        match &self.inner {
             Inner::Filled(Filled { next_items, .. }) => next_items.is_terminated(),
             _ => false,
         }
@@ -142,13 +167,8 @@ impl<S: Stream + Unpin> Stream for IndexedStream<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::stream::{test_util::yield_on_none, zip_latest_all};
-    use futures::{
-        executor::block_on,
-        pin_mut,
-        stream::{empty, repeat},
-        StreamExt,
-    };
+    use crate::stream::{test_util::yield_on_none, zip_latest_with_all};
+    use futures::{executor::block_on, pin_mut, StreamExt};
 
     #[test]
     fn it_works() {
@@ -156,30 +176,13 @@ mod tests {
         pin_mut!(a);
         let b = yield_on_none([None, Some(10), Some(11), Some(12), None, None, Some(13)]);
         pin_mut!(b);
-        let expected = [
-            vec![0, 10],
-            vec![1, 11],
-            vec![1, 12],
-            vec![2, 12],
-            vec![2, 13],
-        ];
-        let actual =
-            block_on(zip_latest_all([a.left_stream(), b.right_stream()]).collect::<Vec<_>>());
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn zipping_latest_of_2_empty_streams_gives_empty_stream() {
-        let r = block_on(zip_latest_all([empty::<()>(), empty()]).collect::<Vec<_>>());
-        assert_eq!(r, <[Vec<()>; 0]>::default());
-    }
-
-    #[test]
-    fn zipping_latest_of_empty_and_infinite_streams_gives_empty_stream() {
-        let r = block_on(
-            zip_latest_all([empty::<()>().left_stream(), repeat(()).right_stream()])
-                .collect::<Vec<_>>(),
+        let expected = [10, 12, 13, 14, 15];
+        let actual = block_on(
+            zip_latest_with_all([a.left_stream(), b.right_stream()], |items| {
+                items.iter().sum::<i32>()
+            })
+            .collect::<Vec<_>>(),
         );
-        assert_eq!(r, <[Vec<()>; 0]>::default());
+        assert_eq!(actual, expected);
     }
 }
